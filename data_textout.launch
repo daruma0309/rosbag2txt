@@ -1,8 +1,0 @@
-<?xml version="1.0"?>
-<launch>
-  <node name="image_republish" pkg="image_transport" type="republish" args="compressed raw" >
-    <remap from="in" to="/camera/color/image_raw" />
-    <remap from="out" to="/image_raw" />
-  </node>
-  <node name="data_textout" pkg="data_textout" type="data_textout" output="screen" cwd="ROS_HOME" args="nitgc_loop210209.txt 2"/>
-</launch>

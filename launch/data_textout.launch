@@ -1,0 +1,10 @@
+<launch>
+  <node name="data_textout" pkg="data_textout" type="data_textout" output="screen" args="senserData_test.txt 2" >
+    <!-- argsは [ファイル名] [データ取得周波数] -->
+    <param name="scan_front_name" type="string" value="/scan_front" />
+    <param name="scan_left_name" type="string" value="/scan_left" />
+    <param name="scan_right_name" type="string" value="/scan_right" />
+    <param name="odom_name" type="string" value="/ypspur_ros/odom" />
+    <param name="image_name" type="string" value="/publish_image/image" />
+  </node>
+</launch>

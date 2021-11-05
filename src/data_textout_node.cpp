@@ -1,24 +1,9 @@
 #include "data_textout/data_textout_node.hpp"
 
-#define DEG2RAD(x) ((x)*M_PI/180)  // 度からラジアン
-#define RAD2DEG(x) ((x)*180/M_PI)  // ラジアンから度
-
-//クオータニオンからRPYに変換
-void geometry_quat_to_rpy(
-  double& roll,
-  double& pitch,
-  double& yaw,
-  geometry_msgs::Quaternion geometry_quat)
-{
-  tf::Quaternion quat;
-  quaternionMsgToTF(geometry_quat, quat);
-  tf::Matrix3x3(quat).getRPY(roll, pitch, yaw);  //rpy are Pass by Reference
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 // odomのコールバック
 void Listener::callback_odom(const nav_msgs::Odometry &odom_msg) {
+  std::lock_guard<std::mutex> lock(m);
+
   double roll, pitch, yaw;
 
   pos.x = odom_msg.pose.pose.position.x;
@@ -29,36 +14,88 @@ void Listener::callback_odom(const nav_msgs::Odometry &odom_msg) {
   return;
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// scan_frontのコールバック
+void Listener::callback_scan_front(const sensor_msgs::LaserScan &scan_msg) {
+  std::lock_guard<std::mutex> lock(m);
 
-// scanのコールバック
-void Listener::callback_scan(const sensor_msgs::LaserScan &scan_msg) {
   int count = 0;
   double angle = -135.0;
 
-  flag.clear();
+  flag_front.clear();
 
   for(int i = 0; i < scan_msg.ranges.size(); i++) {
-    // 無限大は無視 30m以内のセンサ値のみ使用
-    //if(std::isinf(scan_msg.ranges[i]) == 0 && scan_msg.ranges[i] < 30)
-    if(angle > -90 && angle < 90 && std::isinf(scan_msg.ranges[i]) == 0 && scan_msg.ranges[i] < 30)
+    // 無限大は無視 0.1m〜30mのセンサ値のみ使用
+    if(angle > -90 && angle < 90 && std::isinf(scan_msg.ranges[i]) == 0 && scan_msg.ranges[i] < 30 && scan_msg.ranges[i] > 0.1)
     {
       count++;
-      flag.push_back(true);
+      flag_front.push_back(true);
     } else {
-      flag.push_back(false);
+      flag_front.push_back(false);
     }
     angle += 0.25;
   }
-  data_num = count;
-  scan = scan_msg;
+
+  scan_front_num = count;
+  scan_front = scan_msg;
 
   return;
 }
 
-////////////////////////////////////////////////////////////////////////////////
+// scan_leftのコールバック
+void Listener::callback_scan_left(const sensor_msgs::LaserScan &scan_msg) {
+  std::lock_guard<std::mutex> lock(m);
+  
+  int count = 0;
+  double angle = 180.0;
 
-void Listener::imageCb(const sensor_msgs::ImageConstPtr& msg) {
+  flag_left.clear();
+
+  for(int i = 0; i < scan_msg.ranges.size(); i++) {
+    if((angle > 135 || angle < -90) && std::isinf(scan_msg.ranges[i]) == 0 && scan_msg.ranges[i] < 30 && scan_msg.ranges[i] > 0.1)
+    {
+      count++;
+      flag_left.push_back(true);
+    } else {
+      flag_left.push_back(false);
+    }
+    angle -= 0.2803738493;
+  }
+
+  scan_left_num = count;
+  scan_left = scan_msg;
+
+  return;
+}
+
+// scan_rightのコールバック
+void Listener::callback_scan_right(const sensor_msgs::LaserScan &scan_msg) {
+  std::lock_guard<std::mutex> lock(m);
+
+  int count = 0;
+  double angle = 180.0;
+
+  flag_right.clear();
+  
+  for(int i = 0; i < scan_msg.ranges.size(); i++) {
+    if((angle > 135 || angle < -90) && std::isinf(scan_msg.ranges[i]) == 0 && scan_msg.ranges[i] < 30 && scan_msg.ranges[i] > 0.1)
+    {
+      count++;
+      flag_right.push_back(true);
+    } else {
+      flag_right.push_back(false);
+    }
+    angle -= 0.2803738493;
+  }
+
+  scan_right_num = count;
+  scan_right = scan_msg;
+  return;
+}
+
+// imageのコールバック
+void Listener::callback_image(const sensor_msgs::ImageConstPtr& msg) {
+  std::lock_guard<std::mutex> lock(m);
+
   cv_bridge::CvImagePtr cv_ptr;
 
   try {
@@ -69,36 +106,57 @@ void Listener::imageCb(const sensor_msgs::ImageConstPtr& msg) {
   }
 
   cvtColor(cv_ptr->image, image, cv::COLOR_BGR2GRAY);
+  return;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void Listener::write2file() {
-  if(stamp == 0) {
-    stamp++;
-    return;
-  }
-
-  // タイムスタンプ
-  outputfile << "LASERSCAN " << stamp << " " << data_num << " " << std::flush;
-  // スキャンデータ
-  double angle = -135.0;
-  for(int i=0; i<scan.ranges.size(); i++) {
-    if(flag[i] == true) {
-      outputfile << angle << " " << scan.ranges[i] << " " << std::flush;
-    }
-    angle += 0.25;
-  }
-  // オドメトリデータ
-  outputfile << pos.x << " " << pos.y << " " << pos.theta << std::endl;
-
+  // 画像出力
   std::ostringstream oss;
   oss << stamp;
   cv::imwrite("image" + oss.str() + ".jpg", image);
 
-  stamp++;
+  outputfile << stamp << " " << pos.x << " " << pos.y << " " << pos.theta << " image" + oss.str() + ".jpg" << std::endl;
+  // front
+  outputfile << scan_front_num << " " << std::flush;
+  double angle = -135.0;
+  for(int i=0; i<scan_front.ranges.size(); i++) {
+    if(flag_front[i] == true) {
+      outputfile << scan_front.ranges[i]*std::cos(DEG2RAD(angle)) + pose_front.tx << " " << scan_front.ranges[i]*std::sin(DEG2RAD(angle)) + pose_front.ty << " " << std::flush;
+    }
+    angle += 0.25;
+  }
+  outputfile << std::endl;
 
-  ROS_INFO("Output sensor data to file.");
+  // left
+  outputfile << scan_left_num << " " << std::flush;
+  angle = 180;
+  for(int i=0; i<scan_left.ranges.size(); i++) {
+    if(flag_left[i] == true) {
+      double x = pose_left.Rmat[0][0]*scan_left.ranges[i]*std::cos(DEG2RAD(angle)) + pose_left.Rmat[0][1]*scan_left.ranges[i]*std::sin(DEG2RAD(angle)) + pose_left.tx;
+      double y = pose_left.Rmat[1][0]*scan_left.ranges[i]*std::cos(DEG2RAD(angle)) + pose_left.Rmat[1][1]*scan_left.ranges[i]*std::sin(DEG2RAD(angle)) + pose_left.ty;
+      outputfile << x << " " << y << " " << std::flush;
+    }
+    angle -= 0.2803738493;
+  }
+  outputfile << std::endl;
+
+  // right
+  outputfile << scan_right_num << " " << std::flush;
+  angle = 180;
+  for(int i=0; i<scan_left.ranges.size(); i++) {
+    if(flag_right[i] == true) {
+      double x = pose_right.Rmat[0][0]*scan_right.ranges[i]*std::cos(DEG2RAD(angle)) + pose_right.Rmat[0][1]*scan_right.ranges[i]*std::sin(DEG2RAD(angle)) + pose_right.tx;
+      double y = pose_right.Rmat[1][0]*scan_right.ranges[i]*std::cos(DEG2RAD(angle)) + pose_right.Rmat[1][1]*scan_right.ranges[i]*std::sin(DEG2RAD(angle)) + pose_right.ty;
+      outputfile << x << " " << y << " " << std::flush;
+    }
+    angle -= 0.2803738493;
+  }
+  outputfile << std::endl;
+
+  ROS_INFO("Output sensor data to file. timestamp = %d", stamp);
+  stamp++;
 
   return;
 }
@@ -107,12 +165,24 @@ void Listener::write2file() {
 
 void Listener::loop(int loop_rate_hz) {
   ros::Rate loop_rate(loop_rate_hz);
+  getTransform();
+  writeFormat();
+
+  ros::AsyncSpinner spinner(5);
+  spinner.start();
+  ROS_INFO("sleep()");
+  loop_rate.sleep();
 
   while(ros::ok()){
-    ros::spinOnce();
-    write2file();
+    {
+      std::lock_guard<std::mutex> lock(m);
+      write2file();
+    }
+    ROS_INFO("sleep()");
     loop_rate.sleep();
   }
+
+  spinner.stop();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
